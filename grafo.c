@@ -14,16 +14,19 @@
 struct nodo {
     struct nodo *ant;
     struct nodo *prox;
-    unsigned int valor;  // guardará índices de vértices
+    unsigned int valor;  // índice do vértice
 };
 typedef struct nodo nodo;
 
-// armazena uma aresta (auxiliar para aresta_corte)
-struct aresta {
-    int v1;
-    int v2;
+// metadados úteis para cálculo de cortes
+// será usado num vetor, de forma que cortes[i] = metadados do vértice i
+struct corte {
+    unsigned int estado;
+    unsigned int pai;  // se pai == vértice, é raiz
+    unsigned int level;
+    unsigned int lowerpoint;
 };
-typedef struct aresta aresta;
+typedef struct corte corte;
 
 struct grafo {
     char *nome;
@@ -40,12 +43,18 @@ void adiciona_lista(nodo **lista, unsigned int valor);
 unsigned int remove_lista(nodo **lista);
 void destroi_lista(nodo *lista);
 unsigned int contem_string(char **vetor, unsigned int n, char *alvo);
+char *preprocessa_linha(char *linha);
 int tipo_linha(char *linha);
 void pega_vertices(char *linha, char **v1, char **v2);
 int comp_str(const void *a, const void *b);
 unsigned int max_dist(grafo *g, unsigned int r);
 int comp_uint(const void *a, const void *b);
 char *str_vetor(unsigned int *v, unsigned int n);
+char *texto_vertices(unsigned int *v, unsigned int n, char **nome_vertices);
+char *texto_aresta(char *v1, char *v2);
+char *texto_arestas(char **arestas, unsigned int n);
+void dfs(grafo *g, corte *metadados);
+void dfs_rec(grafo *g, unsigned int r, corte *metadados);
 
 // FUNÇÕES DE LISTA (segue política FIFO) e VETORES DE STRINGS
 
@@ -123,17 +132,38 @@ int comp_str(const void *a, const void *b) {
 }
 
 // função de ordenação de unsigned int (para qsort)
-// queremos ordenar de forma decrescente
 int comp_uint(const void *a, const void *b) {
     unsigned int x = *(const unsigned int *)a;
     unsigned int y = *(const unsigned int *)b;
     if (x < y)
-        return 1;
+        return -1;
     else if (x == y)
         return 0;
-    return -1;
+    return 1;
 }
 
+// preprocessa uma linha, para ficar num formato mais simples
+char *preprocessa_linha(char *linha) {
+    // trocar '\n' por '\0'
+    if (linha[strlen(linha) -1] == '\n')
+        linha[strlen(linha) - 1] = '\0';
+
+    // remover espaços no inicio
+    char *novo_inicio;
+    for (novo_inicio = linha; *novo_inicio == ' ' && *novo_inicio != '\0'; novo_inicio++);
+    // caso de borda: linha ficou vazia
+    if (*novo_inicio == '\0')
+        return novo_inicio;
+    // remover espaços no final
+    // mesma coisa que encher de '\0'
+    for (size_t i = strlen(novo_inicio)-1; i > 0; i--) {
+        if (linha[i] == ' ')
+            linha[i] = '\0';
+        else
+            break;
+    }
+    return novo_inicio;
+}
 
 // retorna tipo da linha:
 //  0 -> comentário
@@ -220,6 +250,64 @@ char *str_vetor(unsigned int *v, unsigned int n) {
     return resposta;
 }
 
+// cria o texto dos vértices
+// usado em vertices_corte
+char *texto_vertices(unsigned int *v, unsigned int n, char **nome_vertices) {
+    // primeiro, precisamos ver quanto espaço temos que alocar
+    size_t tam_string = 0;
+    for (unsigned int i = 0; i < n; i++)
+        tam_string += strlen(nome_vertices[v[i]]) + 1;  // + 1 para espaço ou \0
+    char *s = malloc(tam_string);
+    // escrevendo cada uma das strings
+    size_t pos = 0;
+    for (unsigned int i = 0; i < n; i++) {
+        strcpy(s+pos, nome_vertices[v[i]]);
+        pos += strlen(nome_vertices[v[i]]);
+        s[pos] = ' ';
+        pos++;
+    }
+    s[pos-1] = '\0';
+    return s;
+}
+
+char *texto_aresta(char *v1, char *v2) {
+    // primeiro, alocar espaço
+    size_t tam = strlen(v1) + strlen(v2) + 2;  // +2 para espaço no meio e \0
+    char *s = malloc(tam);
+    char *temp;
+    // ver qual é maior
+    if (strcmp(v1, v2) > 0) {
+        temp = v1;
+        v1 = v2;
+        v2 = temp;
+    }
+    strcpy(s, v1);
+    strcpy(s+strlen(v1), " ");
+    strcpy(s+strlen(v1)+1, v2);
+    s[tam-1] = '\0';
+    return s;
+}
+
+char *texto_arestas(char **arestas, unsigned int n) {
+    // primeiro, ordenar arestas
+    qsort(arestas, n, sizeof(char *), comp_str);
+    // alocar espaço para elas
+    size_t tam_string = 0;
+    for (unsigned int i = 0; i < n; i++)
+        tam_string += strlen(arestas[i]) + 1;  // + 1 para espaço ou \0
+    char *s = malloc(tam_string);
+    // escrevendo cada uma das strings
+    size_t pos = 0;
+    for (unsigned int i = 0; i < n; i++) {
+        strcpy(s+pos, arestas[i]);
+        pos += strlen(arestas[i]);
+        s[pos] = ' ';
+        pos++;
+    }
+    s[pos-1] = '\0';
+    return s;
+}
+
 // --------------------------------
 
 // FUNÇÕES AUXILIARES DE GRAFO
@@ -269,7 +357,59 @@ unsigned int max_dist(grafo *g, unsigned int r) {
     for (unsigned int i = 0; i < g->n; i++)
         if (distancia[i] > max_dist)
             max_dist = distancia[i];
+    free(distancia);
+    free(processado);
     return max_dist;
+}
+
+// realiza uma busca em profundidade, populando os metadados para cálculos de corte
+void dfs(grafo *g, corte *metadados) {
+    for (unsigned int i = 0; i < g->n; i++) {
+        metadados[i].estado = 0;
+        metadados[i].pai = i;
+    }
+    // passar por todos os vértices, caso tenha vários componentes
+    for (unsigned int v = 0; v < g->n; v++) {
+        // se não foi processado, é novo componente
+        if (metadados[v].estado)
+            continue;
+        // é raiz
+        metadados[v].level = 0;
+        metadados[v].lowerpoint = 0;
+        dfs_rec(g, v, metadados);
+    }
+}
+
+// auxiliar de dfs, faz uma busca em profundidade a partir de r
+void dfs_rec(grafo *g, unsigned int r, corte *metadados) {
+    metadados[r].estado = 1;
+    // iterando nos vizinhos
+    nodo *atual = g->lista_adj[r];
+    // caso de borda: vértice isolado
+    if (!atual) {
+        metadados[r].estado = 2;
+        return;
+    }
+    do {
+        unsigned int w = atual->valor;
+        if (metadados[w].estado == 1 && w != metadados[r].pai && metadados[w].level < metadados[r].lowerpoint) {
+            metadados[r].lowerpoint = metadados[w].level;
+        }
+        else if (metadados[w].estado == 0) {
+            metadados[w].pai = r;
+            // avançando uma unidade na profundidade
+            metadados[w].level = metadados[r].level + 1;
+            // por enquanto, l = L
+            metadados[w].lowerpoint = metadados[w].level;
+            // recursivamente busca nos vizinhos
+            dfs_rec(g, w, metadados);
+            if (metadados[w].lowerpoint < metadados[r].lowerpoint)
+                metadados[r].lowerpoint = metadados[w].lowerpoint;
+        }
+        // próximo vizinho
+        atual = atual->prox;
+    } while(atual != g->lista_adj[r]);
+    metadados[r].estado = 2;
 }
 
 // --------------------------------
@@ -316,14 +456,13 @@ três
 
 grafo *le_grafo(FILE *f) {
     // buffer para ler linhas
-    char linha[MAX_LINHA];
+    char buffer[MAX_LINHA];
+    char *linha;
     grafo *g = malloc(sizeof(grafo));
 
     // ler nome do grafo
-    while (fgets(linha, MAX_LINHA, f)) {
-        // trocar '\n' por '\0'
-        if (linha[strlen(linha) -1] == '\n')
-            linha[strlen(linha) - 1] = '\0';
+    while (fgets(buffer, MAX_LINHA, f)) {
+        linha = preprocessa_linha(buffer);
         // se for nome, é nome do grafo
         if (tipo_linha(linha) == 1) {
             g->nome = malloc(strlen(linha)+1);
@@ -335,10 +474,8 @@ grafo *le_grafo(FILE *f) {
     // guardar nome dos vértices, para depois ler arestas
     g->nome_vertices = NULL;
     g->n = 0;
-    while (fgets(linha, MAX_LINHA, f)) {
-        // trocar '\n' por '\0'
-        if (linha[strlen(linha) -1] == '\n')
-            linha[strlen(linha) - 1] = '\0';
+    while (fgets(buffer, MAX_LINHA, f)) {
+        linha = preprocessa_linha(buffer);
         int tipo = tipo_linha(linha);
         // ignorar comentários
         // se for nome, só adicionar vértice
@@ -383,10 +520,8 @@ grafo *le_grafo(FILE *f) {
     // recomecar leitura do arquivo e procurar arestas
     rewind(f);
     g->m = 0;
-    while (fgets(linha, MAX_LINHA, f)) {
-        // trocar '\n' por '\0'
-        if (linha[strlen(linha) -1] == '\n')
-            linha[strlen(linha) - 1] = '\0';
+    while (fgets(buffer, MAX_LINHA, f)) {
+        linha = preprocessa_linha(buffer);
         // so ler arestas
         if (tipo_linha(linha) != 2)
             continue;
@@ -428,6 +563,7 @@ unsigned int destroi_grafo(grafo *g) {
     free(g->componente);
     // finalmente, libera o grafo
     free(g);
+    return 1;
 }
 
 //------------------------------------------------------------------------------
@@ -575,19 +711,16 @@ char *diametros(grafo *g) {
         diametro[i] = 0;
     // vamos andar pelos vértices, usar como raiz e ver sua distancia máxima
     for (unsigned int r = 0; r < g->n; r++) {
-        unsigned int comp = g->componente[r];
+        unsigned int comp = g->componente[r] - 1;
         unsigned int dist = max_dist(g, r);
         if (dist > diametro[comp])
             diametro[comp] = dist;
     }
     // ordenando diametros em ordem nao decrescente
     qsort(diametro, c, sizeof(unsigned int), comp_uint);
-    printf("DIAMETROS: ");
-    for (unsigned i = 0; i < c; i++)
-        printf("%u ", diametro[i]);
-    printf("\n");
     // criando string disso
     char *str_diametro = str_vetor(diametro, c);
+    free(diametro);
     return str_diametro;
 }
 
@@ -595,7 +728,65 @@ char *diametros(grafo *g) {
 // devolve uma "string" com os nomes dos vértices de corte de g em
 // ordem alfabética, separados por brancos
 
-char *vertices_corte(grafo *g);
+char *vertices_corte(grafo *g) {
+    // coletando informações dos vértices
+    corte *metadados = malloc(sizeof(corte) * g->n);
+    dfs(g, metadados);
+    // salva todos os vértices de corte
+    unsigned int *cortes = NULL;
+    unsigned conta_corte = 0;
+    // analisando cada vértice
+    for (unsigned int v = 0; v < g->n; v++) {
+        // ignora vértices isolados
+        if (!g->lista_adj[v])
+            continue;
+        unsigned int eh_corte = 0;
+        // se for raiz, ver quantos filhos tem
+        if (metadados[v].pai == v) {
+            unsigned conta_filhos = 0;
+            // loopar nos vizinhos...
+            nodo *atual = g->lista_adj[v];
+            do {
+                unsigned int w = atual->valor;
+                if (metadados[w].pai == v)
+                    conta_filhos++;
+                atual = atual->prox;
+            } while(atual != g->lista_adj[v]);
+            // se tiver dois ou mais filhos, é de corte
+            if (conta_filhos >= 2)
+                eh_corte = 1;
+        }
+        // se não for raiz, analisar lowerpoint
+        else {
+            // loopar nos vizinhos...
+            nodo *atual = g->lista_adj[v];
+            do {
+                unsigned int w = atual->valor;
+                // se l(w) >= L(v), é corte
+                if (metadados[w].lowerpoint >= metadados[v].level)
+                    eh_corte = 1;
+                atual = atual->prox;
+            } while(atual != g->lista_adj[v] && eh_corte == 0);
+        }
+        // se for de corte, adicionar
+        if (eh_corte) {
+            conta_corte++;
+            cortes = realloc(cortes, conta_corte*sizeof(unsigned int));
+            cortes[conta_corte-1] = v;
+        }
+    }
+    char *s;
+    // caso de borda: não tem vértices de corte
+    if (conta_corte == 0) {
+        s = malloc(1);
+        s[0] = '\0';
+    }
+    else
+        s = texto_vertices(cortes, conta_corte, g->nome_vertices);
+    free(cortes);
+    free(metadados);
+    return s;
+}
 
 //------------------------------------------------------------------------------
 // devolve uma "string" com as arestas de corte de g em ordem alfabética, separadas por brancos
@@ -604,4 +795,44 @@ char *vertices_corte(grafo *g);
 // por exemplo, se as arestas de corte são {z, a}, {x, b} e {y, c}, a resposta será a string
 // "a z b x c y"
 
-char *arestas_corte(grafo *g);
+char *arestas_corte(grafo *g) {
+    // coletando informações dos vértices
+    corte *metadados = malloc(sizeof(corte) * g->n);
+    dfs(g, metadados);
+    // salva as arestas, em formato de string ({a, b} -> "a b")
+    char **cortes = NULL;
+    unsigned int conta_corte = 0;
+    // iterando nos vértices
+    for (unsigned int v = 0; v < g->n; v++) {
+        // caso de borda: vértice isolado obviamente não tem aresta de corte
+        if (!g->lista_adj[v])
+            continue;
+        // vamos analisar seus filhos
+        nodo *atual = g->lista_adj[v];
+        do {
+            unsigned int u = atual->valor;
+            // se é filho e l(v) < L(u), é corte
+            if (metadados[u].pai == v && metadados[u].lowerpoint > metadados[v].level) {
+                char *temp = texto_aresta(g->nome_vertices[v], g->nome_vertices[u]);
+                conta_corte++;
+                cortes = realloc(cortes, conta_corte * sizeof(char *));
+                cortes[conta_corte-1] = temp;
+            }
+            atual = atual->prox;
+        } while(atual != g->lista_adj[v]);
+    }
+    // caso de borda: sem arestas de corte
+    char *s;
+    if (conta_corte == 0) {
+        s = malloc(1);
+        s[0] = '\0';
+    }
+    else
+        s = texto_arestas(cortes, conta_corte);
+    // libera textos temporários
+    for (unsigned int i = 0; i < conta_corte; i++)
+        free(cortes[i]);
+    free(cortes);
+    free(metadados);
+    return s;
+}
