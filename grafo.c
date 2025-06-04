@@ -15,8 +15,22 @@ struct nodo {
     struct nodo *ant;
     struct nodo *prox;
     unsigned int valor;  // índice do vértice
+    unsigned int peso;   // peso da aresta que chega nele
 };
 typedef struct nodo nodo;
+
+// estrutura auxiliar para heap
+struct par {
+    unsigned int peso;
+    unsigned int vertice;
+};
+typedef struct par par;
+// heap
+struct heap {
+    par *dados;
+    int n;
+};
+typedef struct heap heap;
 
 // metadados úteis para cálculo de cortes
 // será usado num vetor, de forma que cortes[i] = metadados do vértice i
@@ -39,13 +53,13 @@ struct grafo {
 typedef struct grafo grafo;
 
 // PROTÓTIPOS
-void adiciona_lista(nodo **lista, unsigned int valor);
-unsigned int remove_lista(nodo **lista);
+void adiciona_lista(nodo **lista, unsigned int valor, unsigned int peso);
+unsigned int remove_lista(nodo **lista, unsigned int *peso);
 void destroi_lista(nodo *lista);
 unsigned int contem_string(char **vetor, unsigned int n, char *alvo);
 char *preprocessa_linha(char *linha);
 int tipo_linha(char *linha);
-void pega_vertices(char *linha, char **v1, char **v2);
+void pega_vertices(char *linha, char **v1, char **v2, unsigned int *peso);
 int comp_str(const void *a, const void *b);
 unsigned int max_dist(grafo *g, unsigned int r);
 int comp_uint(const void *a, const void *b);
@@ -55,15 +69,19 @@ char *texto_aresta(char *v1, char *v2);
 char *texto_arestas(char **arestas, unsigned int n);
 void dfs(grafo *g, corte *metadados);
 void dfs_rec(grafo *g, unsigned int r, corte *metadados);
+void troca_par(par *a, par *b);
+void insere_heap(heap *h, unsigned int v, unsigned int peso);
+par deleta_heap(heap *h);
 
 // FUNÇÕES DE LISTA (segue política FIFO) e VETORES DE STRINGS
 
 // adiciona valor à lista (no final dela)
-void adiciona_lista(nodo **lista, unsigned int valor) {
+void adiciona_lista(nodo **lista, unsigned int valor, unsigned int peso) {
     // caso de borda: lista vazia
     if (!(*lista)) {
         *lista = malloc(sizeof(nodo));
         (*lista)->valor = valor;
+        (*lista)->peso = peso;
         (*lista)->ant = (*lista);
         (*lista)->prox = (*lista);
         return;
@@ -71,6 +89,7 @@ void adiciona_lista(nodo **lista, unsigned int valor) {
     // aloca nodo
     nodo *novo = malloc(sizeof(nodo));
     novo->valor = valor;
+    novo->peso = peso;
     // insere no final da lista
     nodo *ultimo = (*lista)->ant;
     (*lista)->ant = novo;
@@ -81,17 +100,20 @@ void adiciona_lista(nodo **lista, unsigned int valor) {
 
 // remove valor na cabeça da lista e retorna ele
 // assume que lista não está vazia
-unsigned int remove_lista(nodo **lista) {
+// se peso for NULL, só ignora
+unsigned int remove_lista(nodo **lista, unsigned int *peso) {
     unsigned int temp;
     // caso de borda: lista de tamanho 1
     if ((*lista)->prox == (*lista)) {
         temp = (*lista)->valor;
+        if (peso) *peso = (*lista)->peso;
         free(*lista);
         *lista = NULL;
         return temp;
     }
     // guardando valores para nao perder
     temp = (*lista)->valor;
+    if (peso) *peso = (*lista)->peso;
     nodo *prox = (*lista)->prox;
     nodo *ant = (*lista)->ant;
     free((*lista));
@@ -104,7 +126,7 @@ unsigned int remove_lista(nodo **lista) {
 // libera toda a memória alocada pela lista
 void destroi_lista(nodo *lista) {
     while (lista) {
-        remove_lista(&lista);
+        remove_lista(&lista, NULL);
     }
 }
 
@@ -181,8 +203,9 @@ int tipo_linha(char *linha) {
 }
 
 // pega os vértices numa linha de aresta
-void pega_vertices(char *linha, char **v1, char **v2) {
-    // procura onde stá o --
+// TODO: ADICIONAR PESOS
+void pega_vertices(char *linha, char **v1, char **v2, unsigned int *peso) {
+    // procura onde está o --
     char *local_sep = strstr(linha, "--");
 
     // ignora espaços entre primeiro vértice e "--"
@@ -200,7 +223,7 @@ void pega_vertices(char *linha, char **v1, char **v2) {
     char *inicio = local_sep + 2;
     while (*inicio == ' ')
         inicio++;
-    // ignora qualquer coisa depois do segundo vértice
+    // procura o fim dessa string
     fim = inicio;
     while (*fim != ' ' && *fim != '\0')
         fim++;
@@ -211,6 +234,18 @@ void pega_vertices(char *linha, char **v1, char **v2) {
     strncpy(segundo, inicio, tam);
     segundo[tam] = '\0';
     *v2 = segundo;
+
+    // pegar vértice, se existir
+    // se não existir, assumir que é peso 1
+    inicio = fim + 1;
+    // ignorar espaços e tal
+    while (*inicio == ' ' && *inicio != '\0')
+        inicio++;
+    if (*inicio == '\0') {
+        *peso = 1;
+        return;
+    }
+    sscanf(inicio, "%u", peso);
 }
 
 // cria uma string a partir de um vetor de unsigned int
@@ -314,25 +349,31 @@ char *texto_arestas(char **arestas, unsigned int n) {
 
 // retorna a maior distância no grafo a partir do vértice r
 unsigned int max_dist(grafo *g, unsigned int r) {
-    // estratégia: usar busca em largura e guardar distâncias
+    // estratégia: dijktra's
 
     // distancias a partir de r
     unsigned int *distancia = malloc(sizeof(unsigned int) * g->n);
     for (unsigned int i = 0; i < g->n; i++)
-        distancia[i] = 0;
+        distancia[i] = 4294967295;  // "infinito"
     // vértices que já foram processados
     unsigned int *processado = malloc(sizeof(unsigned int) * g->n);
     for (unsigned int i = 0; i < g->n; i++)
         processado[i] = 0;
 
-    // fila para fazer busca em largura
-    nodo *fila = NULL;
+    // fila prioritária
+    heap *h = malloc(sizeof(heap));
+    h->dados = malloc(sizeof(par) * g->n);
+    h->n = 0;
 
-    // insere raiz e começa BFS
-    adiciona_lista(&fila, r);
-    processado[r] = 1;
-    while (fila) {
-        unsigned int v = remove_lista(&fila);
+    // insere raiz e começa dijktra's
+    insere_heap(h, r, 0);
+    distancia[r] = 0;
+    while (h->n) {
+        par temp = deleta_heap(h);
+        unsigned int v = temp.vertice;
+        if (processado[v])
+            continue;
+        processado[v] = 1;
         // processa vizinhos
         nodo *vizinhos = g->lista_adj[v];
         // caso de borda: vértice isolado
@@ -341,24 +382,25 @@ unsigned int max_dist(grafo *g, unsigned int r) {
         nodo *atual = vizinhos;
         do {
             unsigned int u = atual->valor;
-            // incrementar distância
-            if (!processado[u]) {
-                // agora, ta processado
-                processado[u] = 1;
-                distancia[u] += distancia[v] + 1;
-                adiciona_lista(&fila, u);
+            unsigned int peso_u = atual->peso;
+            // se melhora distancia, atualizar
+            if (distancia[v]+peso_u < distancia[u]) {
+                distancia[u] = distancia[v] + peso_u;
+                insere_heap(h, u, distancia[u]);
             }
-            // avança para próximo vizinho
             atual = atual->prox;
         } while(atual != vizinhos);
     }
     // retorna maior distancia
     unsigned int max_dist = 0;
     for (unsigned int i = 0; i < g->n; i++)
-        if (distancia[i] > max_dist)
+    // se um vértice não foi processado é porque ele não ta no componente
+        if (distancia[i] > max_dist && processado[i] && i != r)
             max_dist = distancia[i];
     free(distancia);
     free(processado);
+    free(h->dados);
+    free(h);
     return max_dist;
 }
 
@@ -413,6 +455,55 @@ void dfs_rec(grafo *g, unsigned int r, corte *metadados) {
 }
 
 // --------------------------------
+
+// FUNÇÕES DE HEAP
+void troca_par(par *a, par *b) {
+    par c = *a;
+    *a = *b;
+    *b = c;
+}
+void insere_heap(heap *h, unsigned int v, unsigned int peso) {
+    int i = h->n++;
+    par p;
+    p.vertice = v;
+    p.peso = peso;
+    h->dados[i] = p;
+
+    while (i > 0) {
+        int pai = (i - 1) / 2;
+        if (h->dados[i].peso >= h->dados[pai].peso) break;
+        troca_par(&h->dados[i], &h->dados[pai]);
+        i = pai;
+    }
+}
+
+par deleta_heap(heap *h) {
+    if (h->n == 0) {
+        h->n--;
+        return h->dados[0];
+    }
+    par topo = h->dados[0];
+    h->dados[0] = h->dados[--h->n];
+
+    int i = 0;
+    while (1) {
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+        int smallest = i;
+
+        if (left < h->n && h->dados[left].peso < h->dados[smallest].peso)
+            smallest = left;
+        if (right < h->n && h->dados[right].peso < h->dados[smallest].peso)
+            smallest = right;
+
+        if (smallest == i) break;
+        troca_par(&h->dados[i], &h->dados[smallest]);
+        i = smallest;
+    }
+    return topo;
+}
+
+// -----------------------------------------------------------------------------
 
 
 //------------------------------------------------------------------------------
@@ -490,7 +581,8 @@ grafo *le_grafo(FILE *f) {
         // se for aresta, adicionar ambos vértices
         else if (tipo == 2) {
             char *v1, *v2;
-            pega_vertices(linha, &v1, &v2);
+            unsigned int temp;
+            pega_vertices(linha, &v1, &v2, &temp);
             // se vértices não estiverem nos vértices já guardados, adiciona-los
             if (contem_string(g->nome_vertices, g->n, v1) == g->n) {
                 g->n++;
@@ -527,12 +619,13 @@ grafo *le_grafo(FILE *f) {
             continue;
         g->m++;
         char *v1, *v2;
-        pega_vertices(linha, &v1, &v2);
+        unsigned int peso;
+        pega_vertices(linha, &v1, &v2, &peso);
         unsigned int i = contem_string(g->nome_vertices, g->n, v1);
         unsigned int j = contem_string(g->nome_vertices, g->n, v2);
         // adiciona arestas nos dois sentidos
-        adiciona_lista(&(g->lista_adj[i]), j);
-        adiciona_lista(&(g->lista_adj[j]), i);
+        adiciona_lista(&(g->lista_adj[i]), j, peso);
+        adiciona_lista(&(g->lista_adj[j]), i, peso);
         free(v1);
         free(v2);
     }
@@ -596,9 +689,9 @@ unsigned int bipartido(grafo *g) {
         // senão, pintar de uma cor qualquer
         cores[i] = 1;
         // colocar nodo na fila e processar em BFS
-        adiciona_lista(&fila, i);
+        adiciona_lista(&fila, i, 0);
         while (fila) {
-            unsigned int v = remove_lista(&fila);
+            unsigned int v = remove_lista(&fila, NULL);
             // agora ta sendo processado
             processado[v] = 1;
             // vamos tentar colorir os vizinhos diferente
@@ -621,7 +714,7 @@ unsigned int bipartido(grafo *g) {
                 }
                 // adicionar nodo na fila se não foi processado
                 if (!processado[u])
-                    adiciona_lista(&fila, u);
+                    adiciona_lista(&fila, u, 0);
                 // avança para próximo vizinho
                 atual = atual->prox;
             } while(atual != vizinhos);
@@ -670,9 +763,9 @@ unsigned int n_componentes(grafo *g) {
         c++;
         g->componente[i] = c;
         // colocar vértice na fila e processar em BFS
-        adiciona_lista(&fila, i);
+        adiciona_lista(&fila, i, 0);
         while (fila) {
-            unsigned int v = remove_lista(&fila);
+            unsigned int v = remove_lista(&fila, NULL);
             // vizinhos estão no mesmo componente
             nodo *vizinhos = g->lista_adj[v];
             // caso de borda: vértice isolado
@@ -684,7 +777,7 @@ unsigned int n_componentes(grafo *g) {
                 // definir componente se necessário e colocar na fila
                 if (!g->componente[u]) {
                     g->componente[u] = c;
-                    adiciona_lista(&fila, u);
+                    adiciona_lista(&fila, u, 0);
                 }
                 // avança para próximo vizinho
                 atual = atual->prox;
