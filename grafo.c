@@ -288,20 +288,28 @@ char *str_vetor(unsigned int *v, unsigned int n) {
 // cria o texto dos vértices
 // usado em vertices_corte
 char *texto_vertices(unsigned int *v, unsigned int n, char **nome_vertices) {
+    // guardando nome dos vértices de corte e ordenando vértices
+    char **vertices_ordenado = malloc(n * sizeof(char *));
+    for (unsigned int i = 0; i < n; i++) {
+        vertices_ordenado[i] = malloc(strlen(nome_vertices[v[i]]) + 1);
+        strcpy(vertices_ordenado[i], nome_vertices[v[i]]);
+    }
+    qsort(vertices_ordenado, n, sizeof(char*), comp_str);
     // primeiro, precisamos ver quanto espaço temos que alocar
     size_t tam_string = 0;
     for (unsigned int i = 0; i < n; i++)
-        tam_string += strlen(nome_vertices[v[i]]) + 1;  // + 1 para espaço ou \0
+        tam_string += strlen(vertices_ordenado[i]) + 1;  // + 1 para espaço ou \0
     char *s = malloc(tam_string);
     // escrevendo cada uma das strings
     size_t pos = 0;
     for (unsigned int i = 0; i < n; i++) {
-        strcpy(s+pos, nome_vertices[v[i]]);
-        pos += strlen(nome_vertices[v[i]]);
+        strcpy(s+pos, vertices_ordenado[i]);
+        pos += strlen(vertices_ordenado[i]);
         s[pos] = ' ';
         pos++;
     }
     s[pos-1] = '\0';
+    free(vertices_ordenado);
     return s;
 }
 
@@ -562,9 +570,15 @@ grafo *le_grafo(FILE *f) {
         }
     }
 
+    // ler resto do grafo
     // guardar nome dos vértices, para depois ler arestas
-    g->nome_vertices = NULL;
+    g->nome_vertices = malloc(sizeof(char *));
+    g->lista_adj = malloc(sizeof(nodo *));
+    g->lista_adj[0] = NULL;
+    g->m = 0;
     g->n = 0;
+    // capacidade para fazer reallocs mais eficientemente
+    unsigned int capacidade = 1;
     while (fgets(buffer, MAX_LINHA, f)) {
         linha = preprocessa_linha(buffer);
         int tipo = tipo_linha(linha);
@@ -575,60 +589,60 @@ grafo *le_grafo(FILE *f) {
             strcpy(nome, linha);
             nome[strlen(linha)] = '\0';
             g->n++;
-            g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * g->n);
+            // aumenta espaço se necessário
+            if (g->n > capacidade) {
+                capacidade *= 2;
+                g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * capacidade);
+                g->lista_adj = realloc(g->lista_adj, sizeof(nodo *) * capacidade);
+            }
             g->nome_vertices[g->n - 1] = nome;
+            g->lista_adj[g->n - 1] = NULL;
         }
         // se for aresta, adicionar ambos vértices
         else if (tipo == 2) {
             char *v1, *v2;
-            unsigned int temp;
-            pega_vertices(linha, &v1, &v2, &temp);
+            unsigned int peso;
+            pega_vertices(linha, &v1, &v2, &peso);
+            g->m++;
+            unsigned int i, j;
+            i = contem_string(g->nome_vertices, g->n, v1);
+            j = contem_string(g->nome_vertices, g->n, v2);
+            unsigned int tam_atual = g->n;  // se i == tam_atual, não estava na lista (j idem)
             // se vértices não estiverem nos vértices já guardados, adiciona-los
-            if (contem_string(g->nome_vertices, g->n, v1) == g->n) {
+            if (i == tam_atual) {
                 g->n++;
-                g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * g->n);
+                if (g->n > capacidade) {
+                    capacidade *= 2;
+                    g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * capacidade);
+                    g->lista_adj = realloc(g->lista_adj, sizeof(nodo *) * capacidade);
+                }
                 g->nome_vertices[g->n - 1] = v1;
+                g->lista_adj[g->n - 1] = NULL;
+                // posição desse vértice na lista
+                i = g->n - 1;
             }
             else
                 free(v1);
-            if (contem_string(g->nome_vertices, g->n, v2) == g->n) {
+            if (j == tam_atual) {
                 g->n++;
-                g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * g->n);
+                if (g->n > capacidade) {
+                    capacidade *= 2;
+                    g->nome_vertices = realloc(g->nome_vertices, sizeof(char *) * capacidade);
+                    g->lista_adj = realloc(g->lista_adj, sizeof(nodo *) * capacidade);
+                }
                 g->nome_vertices[g->n - 1] = v2;
+                g->lista_adj[g->n - 1] = NULL;
+                // posição desse vértice na lista
+                j = g->n - 1;
             }
             else
                 free(v2);
+            // adicionando aresta em ambos vértices
+            adiciona_lista(&(g->lista_adj[i]), j, peso);
+            adiciona_lista(&(g->lista_adj[j]), i, peso);
         }
     }
-    // ordenar vértices por ordem alfabética (por conveniência)
-    qsort(g->nome_vertices, g->n, sizeof(char *), comp_str);
 
-    // agora, adicionar arestas
-    g->lista_adj = malloc(sizeof(nodo *) * g->n);
-    // zerando listas
-    for (unsigned int i = 0; i < g->n; i++)
-        g->lista_adj[i] = NULL;
-    g->m = 0;
-    // recomecar leitura do arquivo e procurar arestas
-    rewind(f);
-    g->m = 0;
-    while (fgets(buffer, MAX_LINHA, f)) {
-        linha = preprocessa_linha(buffer);
-        // so ler arestas
-        if (tipo_linha(linha) != 2)
-            continue;
-        g->m++;
-        char *v1, *v2;
-        unsigned int peso;
-        pega_vertices(linha, &v1, &v2, &peso);
-        unsigned int i = contem_string(g->nome_vertices, g->n, v1);
-        unsigned int j = contem_string(g->nome_vertices, g->n, v2);
-        // adiciona arestas nos dois sentidos
-        adiciona_lista(&(g->lista_adj[i]), j, peso);
-        adiciona_lista(&(g->lista_adj[j]), i, peso);
-        free(v1);
-        free(v2);
-    }
     // espaço para componentes (= 0 indica que não foi calculado)
     g->componente = malloc(sizeof(unsigned int) * g->n);
     for (unsigned int i = 0; i < g->n; i++)
