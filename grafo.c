@@ -309,6 +309,8 @@ char *texto_vertices(unsigned int *v, unsigned int n, char **nome_vertices) {
         pos++;
     }
     s[pos-1] = '\0';
+    for (unsigned int i = 0; i < n; i++)
+        free(vertices_ordenado[i]);
     free(vertices_ordenado);
     return s;
 }
