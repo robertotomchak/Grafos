@@ -17,6 +17,6 @@ Para verificar que a biblioteca está funcionando corretamente, o principal test
 ## Limitações
 A principal limitação desse trabalho é o alto custo computacional para ler o grafo, que possui complexidade O((n+m)^2), já que para cada vértice numa linha de aresta, é preciso checar se ele já existia, além de que leitura de arquivos costuma ser uma operação lenta.
 
-Para fazer um teste de estresse, foi testado o arquivo de teste (teste.c) com o grafo de todas as palavras da língua portuguesa, mas limitado a apenas as palavras que começam com a letra "a" (n = 40283 e m = 107181 nesse caso). O tempo total foi de 1min8seg, com os principais gargalos sendo a função de leitura do grafo e do cálculo de diâmetros, que também possui alta complexidade.
+Para fazer testes de estresse, foi testado o arquivo de teste (teste.c) com o grafo de todas as palavras da língua portuguesa, inicialmente limitado a apenas as palavras que começam com a letra "a" (n = 40283 e m = 107181 nesse caso). O tempo total foi de 1min8seg, com os principais gargalos sendo a função de leitura do grafo e do cálculo de diâmetros, que também possui alta complexidade. Posteriormente foi testado com todas as palavras também (n=?, m=?), resultando num tempo total de 66min53seg.
 
 Fora isso, a biblioteca realiza diversas alocações de memória, o que pode fazer um uso intensivo de memória que pode ser prejudicial em arquiteturas pequenas. Entretanto, esse problema não foi observado nos testes realizados.
