@@ -497,18 +497,18 @@ par deleta_heap(heap *h) {
 
     int i = 0;
     while (1) {
-        int left = 2 * i + 1;
-        int right = 2 * i + 2;
-        int smallest = i;
+        int esq = 2 * i + 1;
+        int dir = 2 * i + 2;
+        int menor = i;
 
-        if (left < h->n && h->dados[left].peso < h->dados[smallest].peso)
-            smallest = left;
-        if (right < h->n && h->dados[right].peso < h->dados[smallest].peso)
-            smallest = right;
+        if (esq < h->n && h->dados[esq].peso < h->dados[menor].peso)
+            menor = esq;
+        if (dir < h->n && h->dados[dir].peso < h->dados[menor].peso)
+            menor = dir;
 
-        if (smallest == i) break;
-        troca_par(&h->dados[i], &h->dados[smallest]);
-        i = smallest;
+        if (menor == i) break;
+        troca_par(&h->dados[i], &h->dados[menor]);
+        i = menor;
     }
     return topo;
 }
